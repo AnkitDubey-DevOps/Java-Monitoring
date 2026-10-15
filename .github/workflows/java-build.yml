@@ -36,35 +36,51 @@ jobs:
             -maxdepth 1 -type f -name '*.jar' \
             ! -name '*.original' | head -n 1)
 
-          test -n "$JAR" || { echo "JAR not found"; exit 1; }
+          if [ -z "$JAR" ]; then
+            echo "ERROR: Application JAR not found"
+            exit 1
+          fi
 
           nohup java -jar "$JAR" --server.port=8080 \
             > /tmp/java-app.log 2>&1 &
+          echo $! > /tmp/java-app.pid
 
           for i in {1..60}; do
-            if curl -fsS http://127.0.0.1:8080/ > /dev/null; then
+            if curl -sS -o /dev/null http://127.0.0.1:8080/; then
               echo "Application is responding on port 8080"
-              break
+              exit 0
             fi
-            if ! kill -0 "$!" 2>/dev/null; then
+
+            if ! kill -0 "$(cat /tmp/java-app.pid)" 2>/dev/null; then
+              echo "Application stopped unexpectedly:"
               cat /tmp/java-app.log
               exit 1
             fi
+
             sleep 2
           done
 
-          curl -fsS http://127.0.0.1:8080/ > /dev/null || {
-            cat /tmp/java-app.log
-            exit 1
-          }
+          echo "Application did not respond within 120 seconds:"
+          cat /tmp/java-app.log
+          exit 1
+
+      - name: Setup Cloudflared
+        uses: AnimMouse/setup-cloudflared@v2
 
       - name: Start Temporary Public Tunnel
-        uses: AnimMouse/setup-cloudflared@v2
+        uses: AnimMouse/setup-cloudflared/tunnel@v2
         with:
           url: http://localhost:8080
 
       - name: Keep Demo Running
         run: |
-          echo "Temporary URL tunnel started."
-          echo "Open the URL shown in the previous step's logs."
+          echo "The temporary tunnel should be listed in the previous step's logs."
           sleep 1500
+
+      - name: Shutdown Cloudflared
+        if: always()
+        uses: AnimMouse/setup-cloudflared/shutdown@v2
+
+      - name: Show Application Logs if Failed
+        if: failure()
+        run: cat /tmp/java-app.log || true
