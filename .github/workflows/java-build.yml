@@ -1,22 +1,19 @@
 
-name: Java Monitoring Build
+name: Java Monitoring - Temporary Demo
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
-  pull_request:
-    branches:
-      - master
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build Java Application
+  run-demo:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout Repository
@@ -29,12 +26,45 @@ jobs:
           java-version: '17'
           cache: maven
 
-      - name: Build with Maven
-        run: mvn -B -f Java-Monitoring-Project-main/pom.xml clean package
+      - name: Build Application
+        run: mvn -B -f Java-Monitoring-Project-main/pom.xml clean package -DskipTests
 
-      - name: Upload JAR Artifact
-        uses: actions/upload-artifact@v4
+      - name: Start Spring Boot Application
+        shell: bash
+        run: |
+          JAR=$(find Java-Monitoring-Project-main/target \
+            -maxdepth 1 -type f -name '*.jar' \
+            ! -name '*.original' | head -n 1)
+
+          test -n "$JAR" || { echo "JAR not found"; exit 1; }
+
+          nohup java -jar "$JAR" --server.port=8080 \
+            > /tmp/java-app.log 2>&1 &
+
+          for i in {1..60}; do
+            if curl -fsS http://127.0.0.1:8080/ > /dev/null; then
+              echo "Application is responding on port 8080"
+              break
+            fi
+            if ! kill -0 "$!" 2>/dev/null; then
+              cat /tmp/java-app.log
+              exit 1
+            fi
+            sleep 2
+          done
+
+          curl -fsS http://127.0.0.1:8080/ > /dev/null || {
+            cat /tmp/java-app.log
+            exit 1
+          }
+
+      - name: Start Temporary Public Tunnel
+        uses: AnimMouse/setup-cloudflared@v2
         with:
-          name: java-monitoring-jar
-          path: Java-Monitoring-Project-main/target/*.jar
-          if-no-files-found: error
+          url: http://localhost:8080
+
+      - name: Keep Demo Running
+        run: |
+          echo "Temporary URL tunnel started."
+          echo "Open the URL shown in the previous step's logs."
+          sleep 1500
