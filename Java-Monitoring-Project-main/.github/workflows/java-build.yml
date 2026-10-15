@@ -1,6 +1,6 @@
 
 name: Java Monitoring Build
-
+#this is push based trigger
 on:
   push:
     branches:
