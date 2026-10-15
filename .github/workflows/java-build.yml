@@ -1,86 +1,67 @@
+# Build Java app, push Docker image, and create temporary URL
 
-name: Java Monitoring - Temporary Demo
+name: Java Monitoring
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - master
-
-permissions:
-  contents: read
+    branches: [master]
+  workflow_dispatch:
 
 jobs:
-  run-demo:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      # Get project code
+      - uses: actions/checkout@v4
 
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
+      # Setup Java 17
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: maven
 
-      - name: Build Application
-        run: mvn -B -f Java-Monitoring-Project-main/pom.xml clean package -DskipTests
+      # Build Java application
+      - name: Build
+        run: mvn -f Java-Monitoring-Project-main/pom.xml package -DskipTests
 
-      - name: Start Spring Boot Application
-        shell: bash
+      # Login to Docker Hub
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Build and push Docker image
+      - name: Docker Build and Push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./Java-Monitoring-Project-main
+          file: ./Java-Monitoring-Project-main/Dockerfile
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/java-monitoring:latest
+
+      # Start Java application
+      - name: Start App
         run: |
-          JAR=$(find Java-Monitoring-Project-main/target \
-            -maxdepth 1 -type f -name '*.jar' \
-            ! -name '*.original' | head -n 1)
-
-          if [ -z "$JAR" ]; then
-            echo "ERROR: Application JAR not found"
-            exit 1
-          fi
-
-          nohup java -jar "$JAR" --server.port=8080 \
-            > /tmp/java-app.log 2>&1 &
-          echo $! > /tmp/java-app.pid
-
+          JAR=$(find Java-Monitoring-Project-main/target -name '*.jar' ! -name '*.original' | head -n 1)
+          test -n "$JAR" || exit 1
+          nohup java -jar "$JAR" --server.port=8080 > app.log 2>&1 &
           for i in {1..60}; do
-            if curl -sS -o /dev/null http://127.0.0.1:8080/; then
-              echo "Application is responding on port 8080"
-              exit 0
-            fi
-
-            if ! kill -0 "$(cat /tmp/java-app.pid)" 2>/dev/null; then
-              echo "Application stopped unexpectedly:"
-              cat /tmp/java-app.log
-              exit 1
-            fi
-
+            curl -fsS http://localhost:8080/ && break
             sleep 2
           done
+          curl -f http://localhost:8080/
 
-          echo "Application did not respond within 120 seconds:"
-          cat /tmp/java-app.log
-          exit 1
+      # Install Cloudflare Tunnel
+      - uses: AnimMouse/setup-cloudflared@v2
 
-      - name: Setup Cloudflared
-        uses: AnimMouse/setup-cloudflared@v2
-
-      - name: Start Temporary Public Tunnel
+      # Create temporary public URL
+      - name: Start Tunnel
         uses: AnimMouse/setup-cloudflared/tunnel@v2
         with:
           url: http://localhost:8080
 
-      - name: Keep Demo Running
-        run: |
-          echo "The temporary tunnel should be listed in the previous step's logs."
-          sleep 1500
-
-      - name: Shutdown Cloudflared
-        if: always()
-        uses: AnimMouse/setup-cloudflared/shutdown@v2
-
-      - name: Show Application Logs if Failed
-        if: failure()
-        run: cat /tmp/java-app.log || true
+      # Keep application running for 25 minutes
+      - name: Keep App Running
+        run: sleep 150
